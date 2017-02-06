@@ -1,0 +1,25 @@
+{
+    "name": "appzz/process",
+    "description": "Process via pipes",
+    "type": "library",
+    "version": "1.0.0",
+    "keywords": [
+        "process"
+    ],
+    "homepage": "https://www.bitbucket.org/a-pp-zz/process.git",
+    "license": "Apache-2.0",
+    "authors": [
+        {
+            "name": "CoolSwitcher",
+            "email": "ds@appzz.tech",
+            "role": "lead"
+        }
+    ],
+    "require": {
+        "php": ">5.3.3",
+        "appzz/arr": "dev-master"
+    },
+    "autoload": {
+        "psr-4": {"AppZz\\CLI\\": "src/"}
+    }
+}
