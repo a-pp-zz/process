@@ -48,9 +48,9 @@ class Process {
 		return new Process ($cmd, $pipe);
 	}
 
-	public function trigger ($action, $closure)
+	public function trigger ($action, $trigger)
 	{
-		$this->_triggers[$action] = $closure;
+		$this->_triggers[$action] = $trigger;
 		return $this;
 	}
 
