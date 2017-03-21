@@ -47,7 +47,7 @@ class Process {
 		return new Process ($cmd, $pipe);
 	}
 
-	public function trigger ($action, \Closure $closure)
+	public function trigger ($action, $closure)
 	{
 		$this->_triggers[$action] = $closure;
 		return $this;
@@ -94,6 +94,10 @@ class Process {
 
 	private function _call_trigger ($action, $data = array ()) {
 		$f = Arr::get($this->_triggers, $action);
+
+		if ( ! $f)
+			$f = Arr::get($this->_triggers, 'all');
+
 		if ($f) {
 			call_user_func ($f, $data);
 		}
