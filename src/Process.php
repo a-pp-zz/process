@@ -22,6 +22,7 @@ class Process {
 	{
 		$this->_pipes = [];
 		$this->_pipe = $pipe;
+		
 		$descriptor = [
 			["pipe", "r"], // in
 			["pipe", "w"], // out
@@ -69,7 +70,8 @@ class Process {
 		return $this;
 	}
 
-	public function get_exitcode () {
+	public function get_exitcode ()
+	{
 		return $this->_exitcode;
 	}
 
@@ -92,7 +94,7 @@ class Process {
 		return $this;
 	}
 
-	private function _call_trigger ($action, $data = array ()) {
+	private function _call_trigger ($action, $data = []) {
 		$f = Arr::get($this->_triggers, $action);
 
 		if ( ! $f)
