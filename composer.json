@@ -2,7 +2,6 @@
     "name": "appzz/process",
     "description": "Process via pipes",
     "type": "library",
-    "version": "1.0.0",
     "keywords": [
         "process"
     ],
@@ -11,7 +10,7 @@
     "authors": [
         {
             "name": "CoolSwitcher",
-            "email": "ds@appzz.tech",
+            "email": "ds@appzz.pw",
             "role": "lead"
         }
     ],
