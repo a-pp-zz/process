@@ -11,28 +11,34 @@ use AppZz\Helpers\Arr;
  * @author CoolSwitcher
  * @team AppZz
  * @license MIT
+ * #version 2.x
  */
 class Process {
 
-	const READ_LENGTH       = 1024;
-	const STDIN             = 0;
-	const STDOUT            = 1;
-	const STDERR            = 2;
+	const READ_LENGTH = 1024;
+	const STDIN       = 0;
+	const STDOUT      = 1;
+	const STDERR      = 2;
 
 	private $_exitcode;
 	private $_pipes;
-	private $_pipe;
 	private $_process;
 	private $_triggers;
+	private $_cmd;
+
+	private	$_descriptor = [
+		["pipe", "r"],
+		["pipe", "w"],
+		["pipe", "w"]
+	];
 
 	/**
 	 * @param $cmd
-	 * @param int $pipe
 	 * @return Process
 	 */
-	public static function factory ($cmd, $pipe = Process::STDOUT)
+	public static function factory ($cmd)
 	{
-		return new Process ($cmd, $pipe);
+		return new Process ($cmd);
 	}
 
 	public function trigger ($action, $trigger)
@@ -41,16 +47,42 @@ class Process {
 		return $this;
 	}
 
-	public function run ()
+	public function output_file ($file = '', $pipe = Process::STDOUT, $append = true)
 	{
-		$this->_call_trigger('start');
+		$this->_descriptor[$pipe] = ['file', $file, ($append ? 'a' : 'w')];
+		return $this;
+	}
 
-		while (TRUE)
-		{
-			$this->_get_status ();
+	public function run ($wait_exit = false)
+	{
+		$this->_pipes = [];
+		$os = $this->_detect_system ();
 
-			if (isset($this->_exitcode))
-				break;
+		$this->_process = proc_open (
+			$this->_cmd,
+			$this->_descriptor,
+			$this->_pipes,
+			NULL,
+			NULL,
+			['bypass_shell'=>($os == 'Win')]
+		);
+
+		if ($os == 'Win') {
+			stream_set_blocking($this->_pipes[Process::STDOUT], 0);
+			stream_set_blocking($this->_pipes[Process::STDERR], 0);
+		}
+
+		if ($wait_exit) {
+			$this->_call_trigger('start');
+
+			while (true)
+			{
+				$this->_get_status ();
+
+				if (isset($this->_exitcode)) {
+					break;
+				}
+			}
 		}
 
 		return $this;
@@ -61,39 +93,27 @@ class Process {
 		return $this->_exitcode;
 	}
 
-	private function __construct ($cmd, $pipe)
+	private function __construct ($cmd)
 	{
-		$this->_pipes = [];
-		$this->_pipe = $pipe;
-
-		$descriptor = [
-			["pipe", "r"], // in
-			["pipe", "w"], // out
-			["pipe", "w"]  // err
-		];
-
-		$this->_process = proc_open(
-			$cmd,
-			$descriptor,
-			$this->_pipes,
-			NULL,
-			NULL,
-			['bypass_shell'=>TRUE]
-		);
-
-		//Set STDOUT and STDERR to non-blocking
-		stream_set_blocking($this->_pipes[Process::STDOUT], 0);
-		stream_set_blocking($this->_pipes[Process::STDERR], 0);
+		$this->_cmd = $cmd;
 	}
 
 	private function _get_status ()
 	{
 		$process_info = proc_get_status($this->_process);
+
+		$buffer1 = $this->_fillbuffer (Process::STDOUT);
+		$buffer2 = $this->_fillbuffer (Process::STDERR);
+
 		$data = [];
-		$buffer          = $this->_fillbuffer ();
-		$data['buffer']  = $buffer;
-		$last_line       = is_array($buffer) ? array_pop ($buffer) : NULL;
-		$data['message'] = $last_line;
+
+		$data[Process::STDOUT]['buffer']  = $buffer1;
+		$last_line = is_array($buffer1) ? array_pop ($buffer1) : null;
+		$data[Process::STDOUT]['message'] = $last_line;
+
+		$data[Process::STDERR]['buffer']  = $buffer2;
+		$last_line = is_array($buffer2) ? array_pop ($buffer2) : null;
+		$data[Process::STDERR]['message'] = $last_line;
 
 		if (Arr::get($process_info, 'running')) {
 			$this->_call_trigger('running', $data);
@@ -120,30 +140,36 @@ class Process {
 		return $this;
 	}
 
-	private function _fillbuffer ()
+	private function _fillbuffer ($pipe = Process::STDOUT)
 	{
-		$buffer = [];
-		$pipes = [Arr::get($this->_pipes, $this->_pipe)];
+		$pipe_type = Arr::path ($this->_descriptor, $pipe.'.0');
 
-		if (feof(Arr::get($pipes, 0)))
-			return FALSE;
+		if ($pipe_type != 'pipe') {
+			return false;
+		}
+
+		$buffer = [];
+		$pipes = [Arr::get($this->_pipes, $pipe)];
+
+		if (feof(Arr::get($pipes, 0))) {
+			return false;
+		}
 
 		$ready = stream_select ($pipes, $write, $ex, 1, 0);
 
-		if ($ready === FALSE) {
-			return FALSE;
-		}
-		elseif ($ready === 0 ) {
-			return $buffer; // will be empty
+		if ($ready === false) {
+			return false;
+		} elseif ($ready === 0 ) {
+			return $buffer;
 		}
 
 		$status = ['unread_bytes' => 1];
-		$read = TRUE;
+		$read = true;
 
-		while ( $status['unread_bytes'] > 0 ) {
+		while ($status['unread_bytes'] > 0) {
 			$read = fread(Arr::get($pipes, 0), Process::READ_LENGTH);
 
-			if ($read !== FALSE) {
+			if ($read !== false) {
 				$buffer[] = trim($read);
 			}
 
@@ -152,4 +178,20 @@ class Process {
 
 		return $buffer;
 	}
+
+    private function _detect_system () {
+        switch (true) {
+            case stristr(PHP_OS, 'DAR'):
+                $os = 'macOS';
+            break;
+            case stristr(PHP_OS, 'LINUX'):
+                $os = 'Linux';
+            break;
+            default :
+                $os = 'Win';
+            break;
+        }
+
+        return $os;
+    }
 }
