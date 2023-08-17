@@ -81,7 +81,12 @@ class Process {
 
 		$log = Arr::get ($this->_log, $pipe, []);
 
-		if ( ! empty ($log) AND $as_text) {
+		if ($as_text) {
+
+			if (empty ($log)) {
+				return false;
+			}
+			
 			$text = '';
 
 			foreach ($log as $txt) {
