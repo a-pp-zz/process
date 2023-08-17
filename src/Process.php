@@ -1,6 +1,6 @@
 <?php
 /**
- * Run cli-process via pipes
+ * Run CLI-process in background and get status, log via triggers
  */
 namespace AppZz\CLI;
 use AppZz\Helpers\Arr;
@@ -11,7 +11,7 @@ use AppZz\Helpers\Arr;
  * @author CoolSwitcher
  * @team AppZz
  * @license MIT
- * #version 2.x
+ * @version 2.x
  */
 class Process {
 
@@ -26,11 +26,9 @@ class Process {
 	private $_triggers;
 	private $_cmd;
 
-	private	$_descriptor = [
-		["pipe", "r"],
-		["pipe", "w"],
-		["pipe", "w"]
-	];
+	private	$_descriptor = [];
+	private $_log = [];
+	private $_logfiles = [];
 
 	/**
 	 * @param $cmd
@@ -41,18 +39,68 @@ class Process {
 		return new Process ($cmd);
 	}
 
+	/**
+	 * Set trigger
+	 * @param  string $action  all|running|finished
+	 * @param  Closure $trigger closure func
+	 * @return $this
+	 */
 	public function trigger ($action, $trigger)
 	{
 		$this->_triggers[$action] = $trigger;
 		return $this;
 	}
 
+	/**
+	 * Set output to files
+	 * @param  string  $file   path to file
+	 * @param  int  $pipe   pipe
+	 * @param  boolean $append append or no
+	 * @return $this
+	 */
 	public function output_file ($file = '', $pipe = Process::STDOUT, $append = true)
 	{
 		$this->_descriptor[$pipe] = ['file', $file, ($append ? 'a' : 'w')];
+		$this->_logfiles[$pipe] = $file;
 		return $this;
 	}
 
+	/**
+	 * Get output log from files or pipes
+	 * @param  int  $pipe
+	 * @param  boolean $as_text format to text
+	 * @return mixed
+	 */
+	public function get_log ($pipe = Process::STDOUT, $as_text = false)
+	{
+		$logfile = Arr::get ($this->_logfiles, $pipe);
+
+		if ( ! empty ($logfile AND file_exists ($logfile))) {
+			return file_get_contents ($logfile);
+		}
+
+		$log = Arr::get ($this->_log, $pipe, []);
+
+		if ( ! empty ($log) AND $as_text) {
+			$text = '';
+
+			foreach ($log as $txt) {
+				if ( ! empty ($txt)) {
+					$text .= implode ("\n", $txt) . "\n";
+				}
+			}
+
+			return trim ($text);
+		}
+
+		return $log;
+	}
+
+	/**
+	 * Run process
+	 * @param  boolean $wait_exit wait exitcode or no
+	 * @return $this
+	 */
 	public function run ($wait_exit = false)
 	{
 		$this->_pipes = [];
@@ -75,19 +123,22 @@ class Process {
 		if ($wait_exit) {
 			$this->_call_trigger('start');
 
-			while (true)
-			{
+			while (true) :
 				$this->_get_status ();
 
 				if (isset($this->_exitcode)) {
 					break;
 				}
-			}
+			endwhile;
 		}
 
 		return $this;
 	}
 
+	/**
+	 * Get exitcode
+	 * @return mixed
+	 */
 	public function get_exitcode ()
 	{
 		return $this->_exitcode;
@@ -96,55 +147,54 @@ class Process {
 	private function __construct ($cmd)
 	{
 		$this->_cmd = $cmd;
+
+		$this->_descriptor = [
+			["pipe", "r"],
+			["pipe", "w"],
+			["pipe", "w"]
+		];
+
+		$this->_log = [];
+		$this->_logfiles = [];
 	}
 
+	/**
+	 * Get process status, fill data & call triggers
+	 * @return $this
+	 */
 	private function _get_status ()
 	{
-		$process_info = proc_get_status($this->_process);
-
-		$buffer1 = $this->_fillbuffer (Process::STDOUT);
-		$buffer2 = $this->_fillbuffer (Process::STDERR);
-
+		$process_info = proc_get_status ($this->_process);
+		$buff1 = $this->_fill_buffer (Process::STDOUT);
+		$buff2 = $this->_fill_buffer (Process::STDERR);
 		$data = [];
 
-		$data[Process::STDOUT]['buffer']  = $buffer1;
-		$last_line = is_array($buffer1) ? array_pop ($buffer1) : null;
-		$data[Process::STDOUT]['message'] = $last_line;
+		if ( ! empty ($buff1)) {
+			$data[Process::STDOUT] = $buff1;
+		}
 
-		$data[Process::STDERR]['buffer']  = $buffer2;
-		$last_line = is_array($buffer2) ? array_pop ($buffer2) : null;
-		$data[Process::STDERR]['message'] = $last_line;
+		if ( ! empty ($buff2)) {
+			$data[Process::STDERR] = $buff2;
+		}
 
 		if (Arr::get($process_info, 'running')) {
 			$this->_call_trigger('running', $data);
 		} else {
 			$this->_exitcode = Arr::get($process_info, 'exitcode');
-			$this->_call_trigger('finish', $data);
+			$this->_call_trigger('finished', $data);
 		}
 
 		return $this;
 	}
 
-	private function _call_trigger ($action, $data = [])
+	/**
+	 * Fill buffers
+	 * @param  int $pipe
+	 * @return mixed
+	 */
+	private function _fill_buffer ($pipe = Process::STDOUT)
 	{
-		$f = Arr::get($this->_triggers, $action);
-
-		if ( ! $f) {
-			$f = Arr::get($this->_triggers, 'all');
-		}
-
-		if ($f) {
-			call_user_func ($f, $data);
-		}
-
-		return $this;
-	}
-
-	private function _fillbuffer ($pipe = Process::STDOUT)
-	{
-		$pipe_type = Arr::path ($this->_descriptor, $pipe.'.0');
-
-		if ($pipe_type != 'pipe') {
+		if ( ! $this->_is_pipe()) {
 			return false;
 		}
 
@@ -176,11 +226,62 @@ class Process {
 			$status = stream_get_meta_data(Arr::get($pipes, 0));
 		}
 
-		return $buffer;
+		if ( ! empty ($buffer)) {
+			$buffer_vals = trim (implode ('', $buffer));
+			//ignore dummy output
+			if ( ! empty ($buffer_vals)) {
+				$ret = [];
+				$this->_log[$pipe][] = $ret['buffer'] = $buffer;
+				$ret['message'] = array_pop ($buffer);
+				return $ret;
+			}
+		}
+
+		return false;
 	}
 
-    private function _detect_system () {
-        switch (true) {
+	/**
+	 * Detect pipe-type file or pipe
+	 * @param  int $pipe
+	 * @return boolean
+	 */
+	private function _is_pipe ($pipe = Process::STDOUT)
+	{
+		return (Arr::path ($this->_descriptor, $pipe.'.0') == 'pipe');
+	}
+
+	/**
+	 * Try to call closure if present
+	 * @param  string $action
+	 * @param  array  $data
+	 * @return $this
+	 */
+	private function _call_trigger ($action, $data = [])
+	{
+		if (empty ($data)) {
+			$data = null;
+		}
+
+		$f = Arr::get($this->_triggers, $action);
+
+		if ( ! $f) {
+			$f = Arr::get($this->_triggers, 'all');
+		}
+
+		if ($f) {
+			call_user_func ($f, $data);
+		}
+
+		return $this;
+	}
+
+	/**
+	 * Detect OS type
+	 * @return string
+	 */
+    private function _detect_system ()
+    {
+        switch (true) :
             case stristr(PHP_OS, 'DAR'):
                 $os = 'macOS';
             break;
@@ -190,7 +291,7 @@ class Process {
             default :
                 $os = 'Win';
             break;
-        }
+        endswitch;
 
         return $os;
     }
