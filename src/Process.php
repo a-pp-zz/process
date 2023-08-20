@@ -4,6 +4,7 @@
  */
 namespace AppZz\CLI;
 use AppZz\Helpers\Arr;
+use Closure;
 
 /**
  * Class Process
@@ -16,7 +17,6 @@ use AppZz\Helpers\Arr;
 class Process {
 
 	const READ_LENGTH = 1024;
-	const STDIN       = 0;
 	const STDOUT      = 1;
 	const STDERR      = 2;
 
@@ -42,7 +42,7 @@ class Process {
 	/**
 	 * Set trigger
 	 * @param  string $action  all|running|finished
-	 * @param  Closure $trigger closure func
+	 * @param  Closure $trigger closure function
 	 * @return $this
 	 */
 	public function trigger ($action, $trigger)
@@ -58,7 +58,7 @@ class Process {
 	 * @param  boolean $append append or no
 	 * @return $this
 	 */
-	public function output_file ($file = '', $pipe = Process::STDOUT, $append = true)
+	public function output_file (string $file = '', int $pipe = Process::STDOUT, bool $append = true)
 	{
 		$this->_descriptor[$pipe] = ['file', $file, ($append ? 'a' : 'w')];
 		$this->_logfiles[$pipe] = $file;
@@ -68,10 +68,10 @@ class Process {
 	/**
 	 * Get output log from files or pipes
 	 * @param  int  $pipe
-	 * @param  boolean $as_text format to text
+	 * @param  string|bool $sep separator for text
 	 * @return mixed
 	 */
-	public function get_log ($pipe = Process::STDOUT, $as_text = false)
+	public function get_log (int $pipe = Process::STDOUT, $sep = false)
 	{
 		$logfile = Arr::get ($this->_logfiles, $pipe);
 
@@ -81,7 +81,7 @@ class Process {
 
 		$log = Arr::get ($this->_log, $pipe, []);
 
-		if ($as_text) {
+		if ($sep !== false) {
 
 			if (empty ($log)) {
 				return false;
@@ -91,7 +91,7 @@ class Process {
 
 			foreach ($log as $txt) {
 				if ( ! empty ($txt)) {
-					$text .= implode ("\n", $txt) . "\n";
+					$text .= implode ($sep, $txt) . $sep;
 				}
 			}
 
@@ -103,10 +103,10 @@ class Process {
 
 	/**
 	 * Run process
-	 * @param  boolean $wait_exit wait exitcode or no
+	 * @param  bool $wait_exit wait exitcode or no
 	 * @return $this
 	 */
-	public function run ($wait_exit = false)
+	public function run (bool $wait_exit = false)
 	{
 		$this->_pipes = [];
 		$os = $this->_detect_system ();
@@ -195,9 +195,9 @@ class Process {
 	/**
 	 * Fill buffers
 	 * @param  int $pipe
-	 * @return mixed
+	 * @return array|bool
 	 */
-	private function _fill_buffer ($pipe = Process::STDOUT)
+	private function _fill_buffer (int $pipe = Process::STDOUT)
 	{
 		if ( ! $this->_is_pipe()) {
 			return false;
@@ -219,7 +219,6 @@ class Process {
 		}
 
 		$status = ['unread_bytes' => 1];
-		$read = true;
 
 		while ($status['unread_bytes'] > 0) {
 			$read = fread(Arr::get($pipes, 0), Process::READ_LENGTH);
@@ -248,9 +247,9 @@ class Process {
 	/**
 	 * Detect pipe-type file or pipe
 	 * @param  int $pipe
-	 * @return boolean
+	 * @return bool
 	 */
-	private function _is_pipe ($pipe = Process::STDOUT)
+	private function _is_pipe (int $pipe = Process::STDOUT)
 	{
 		return (Arr::path ($this->_descriptor, $pipe.'.0') == 'pipe');
 	}
