@@ -157,11 +157,9 @@ class Process
                 $this->_get_status();
 
                 if (isset($this->_exitcode)) {
-                    break;
+                    return $this->_exitcode;
                 }
             endwhile;
-
-            return $this->_exitcode;
         }
 
         return -1;
