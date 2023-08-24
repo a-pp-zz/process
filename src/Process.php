@@ -2,9 +2,12 @@
 /**
  * Run CLI-process in background and get status, log via triggers
  */
+
 namespace AppZz\CLI;
+
 use AppZz\Helpers\Arr;
 use Closure;
+use Throwable;
 
 /**
  * Class Process
@@ -14,287 +17,309 @@ use Closure;
  * @license MIT
  * @version 2.x
  */
-class Process {
+class Process
+{
+    const READ_LENGTH = 1024;
+    const STDIN = 0;
+    const STDOUT = 1;
+    const STDERR = 2;
 
-	const READ_LENGTH = 1024;
-	const STDOUT      = 1;
-	const STDERR      = 2;
+    private $_exitcode;
+    private $_pipes;
+    private $_process;
+    private $_triggers;
+    private $_cmd;
 
-	private $_exitcode;
-	private $_pipes;
-	private $_process;
-	private $_triggers;
-	private $_cmd;
+    private $_descriptor;
+    private $_log;
+    private $_logfiles;
+    private $_needed_pipes;
 
-	private	$_descriptor = [];
-	private $_log = [];
-	private $_logfiles = [];
+    /**
+     * @param string $cmd
+     * @param int $pipe needed pipe
+     * @return Process
+     */
+    public static function factory(string $cmd, int $pipe = 0): Process
+    {
+        return new Process ($cmd, $pipe);
+    }
 
-	/**
-	 * @param $cmd
-	 * @return Process
-	 */
-	public static function factory ($cmd)
-	{
-		return new Process ($cmd);
-	}
+    /**
+     * Set trigger
+     * @param string $action all|running|finished
+     * @param Closure $trigger closure function
+     * @return $this
+     */
+    public function trigger(string $action, closure $trigger): Process
+    {
+        $this->_triggers[$action] = $trigger;
+        return $this;
+    }
 
-	/**
-	 * Set trigger
-	 * @param  string $action  all|running|finished
-	 * @param  Closure $trigger closure function
-	 * @return $this
-	 */
-	public function trigger ($action, $trigger)
-	{
-		$this->_triggers[$action] = $trigger;
-		return $this;
-	}
+    /**
+     * Set output to files
+     * @param string $file path to file
+     * @param int $pipe pipe
+     * @param boolean $append append or no
+     * @return $this
+     */
+    public function output_file(string $file = '', int $pipe = Process::STDOUT, bool $append = true): Process
+    {
+        $this->_descriptor[$pipe] = ['file', $file, ($append ? 'a' : 'w')];
+        $this->_logfiles[$pipe] = $file;
+        return $this;
+    }
 
-	/**
-	 * Set output to files
-	 * @param  string  $file   path to file
-	 * @param  int  $pipe   pipe
-	 * @param  boolean $append append or no
-	 * @return $this
-	 */
-	public function output_file (string $file = '', int $pipe = Process::STDOUT, bool $append = true)
-	{
-		$this->_descriptor[$pipe] = ['file', $file, ($append ? 'a' : 'w')];
-		$this->_logfiles[$pipe] = $file;
-		return $this;
-	}
+    /**
+     * Get output log from files or pipes
+     * @param int $pipe
+     * @param string $sep separator for text
+     * @return mixed
+     */
+    public function get_log(int $pipe = Process::STDOUT, string $sep = ''): string
+    {
+        $logfile = Arr::get($this->_logfiles, $pipe);
 
-	/**
-	 * Get output log from files or pipes
-	 * @param  int  $pipe
-	 * @param  string|bool $sep separator for text
-	 * @return mixed
-	 */
-	public function get_log (int $pipe = Process::STDOUT, $sep = false)
-	{
-		$logfile = Arr::get ($this->_logfiles, $pipe);
+        if (!empty ($logfile and file_exists($logfile))) {
+            return file_get_contents($logfile);
+        }
 
-		if ( ! empty ($logfile AND file_exists ($logfile))) {
-			return file_get_contents ($logfile);
-		}
+        $log = Arr::get($this->_log, $pipe, []);
 
-		$log = Arr::get ($this->_log, $pipe, []);
+        $text = '';
 
-		if ($sep !== false) {
+        if (empty ($log)) {
+            return $text;
+        }
 
-			if (empty ($log)) {
-				return false;
-			}
-			
-			$text = '';
+        foreach ($log as $txt) {
+            if (!empty ($txt)) {
+                $text .= implode($sep, $txt) . $sep;
+            }
+        }
 
-			foreach ($log as $txt) {
-				if ( ! empty ($txt)) {
-					$text .= implode ($sep, $txt) . $sep;
-				}
-			}
+        return trim($text);
+    }
 
-			return trim ($text);
-		}
+    /**
+     * Get output
+     * @param string $sep
+     * @return string
+     */
+    public function get_output(string $sep = ''): string
+    {
+        return $this->get_log(Process::STDOUT, $sep);
+    }
 
-		return $log;
-	}
+    /**
+     * Get error
+     * @param string $sep
+     * @return string
+     */
+    public function get_error(string $sep = ''): string
+    {
+        return $this->get_log(Process::STDERR, $sep);
+    }
 
-	/**
-	 * Run process
-	 * @param  bool $wait_exit wait exitcode or no
-	 * @return $this
-	 */
-	public function run (bool $wait_exit = false)
-	{
-		$this->_pipes = [];
-		$os = $this->_detect_system ();
+    /**
+     * Run process
+     * @param bool $wait_exit wait exitcode or no
+     * @return int
+     */
+    public function run(bool $wait_exit = false): int
+    {
+        $this->_pipes = [];
+        $os = $this->_detect_system();
 
-		$this->_process = proc_open (
-			$this->_cmd,
-			$this->_descriptor,
-			$this->_pipes,
-			NULL,
-			NULL,
-			['bypass_shell'=>($os == 'Win')]
-		);
+        try {
+            $this->_process = proc_open(
+                $this->_cmd,
+                $this->_descriptor,
+                $this->_pipes,
+                NULL,
+                NULL,
+                ['bypass_shell' => ($os == 'Win')]
+            );
+        } catch (Throwable $e) {
+            return 1;
+        }
 
-		if ($os == 'Win') {
-			stream_set_blocking($this->_pipes[Process::STDOUT], 0);
-			stream_set_blocking($this->_pipes[Process::STDERR], 0);
-		}
+        if ($os == 'Win') {
+            stream_set_blocking($this->_pipes[Process::STDOUT], 0);
+            stream_set_blocking($this->_pipes[Process::STDERR], 0);
+        }
 
-		if ($wait_exit) {
-			$this->_call_trigger('start');
+        if ($wait_exit) {
+            $this->_call_trigger('start');
 
-			while (true) :
-				$this->_get_status ();
+            while (true) :
+                $this->_get_status();
 
-				if (isset($this->_exitcode)) {
-					break;
-				}
-			endwhile;
-		}
+                if (isset($this->_exitcode)) {
+                    break;
+                }
+            endwhile;
 
-		return $this;
-	}
+            return $this->_exitcode;
+        }
 
-	/**
-	 * Get exitcode
-	 * @return mixed
-	 */
-	public function get_exitcode ()
-	{
-		return $this->_exitcode;
-	}
+        return -1;
+    }
 
-	private function __construct ($cmd)
-	{
-		$this->_cmd = $cmd;
+    private function __construct($cmd, $pipe = null)
+    {
+        $this->_cmd = $cmd;
 
-		$this->_descriptor = [
-			["pipe", "r"],
-			["pipe", "w"],
-			["pipe", "w"]
-		];
+        $this->_descriptor = [
+            Process::STDIN => ["pipe", "r"],
+            Process::STDOUT => ["pipe", "w"],
+            Process::STDERR => ["pipe", "w"]
+        ];
 
-		$this->_log = [];
-		$this->_logfiles = [];
-	}
+        $this->_log = [];
+        $this->_logfiles = [];
 
-	/**
-	 * Get process status, fill data & call triggers
-	 * @return $this
-	 */
-	private function _get_status ()
-	{
-		$process_info = proc_get_status ($this->_process);
-		$buff1 = $this->_fill_buffer (Process::STDOUT);
-		$buff2 = $this->_fill_buffer (Process::STDERR);
-		$data = [];
+        if (empty($pipe)) {
+            $pipe = [Process::STDOUT, Process::STDERR];
+        } else {
+            $pipe = (array)$pipe;
+        }
 
-		if ( ! empty ($buff1)) {
-			$data[Process::STDOUT] = $buff1;
-		}
+        $this->_needed_pipes = $pipe;
+    }
 
-		if ( ! empty ($buff2)) {
-			$data[Process::STDERR] = $buff2;
-		}
+    /**
+     * Get process status, fill data & call triggers
+     * @return void
+     */
+    private function _get_status(): void
+    {
+        if (!is_resource($this->_process)) {
+            $this->_exitcode = 1;
+            return;
+        }
 
-		if (Arr::get($process_info, 'running')) {
-			$this->_call_trigger('running', $data);
-		} else {
-			$this->_exitcode = Arr::get($process_info, 'exitcode');
-			$this->_call_trigger('finished', $data);
-		}
+        $process_info = proc_get_status($this->_process);
+        $data = [];
 
-		return $this;
-	}
+        foreach ($this->_needed_pipes as $pipe) {
+            $buffer = $this->_fill_buffer($pipe);
+            if (!empty ($buffer)) {
+                $data[$pipe] = $buffer;
+            }
+        }
 
-	/**
-	 * Fill buffers
-	 * @param  int $pipe
-	 * @return array|bool
-	 */
-	private function _fill_buffer (int $pipe = Process::STDOUT)
-	{
-		if ( ! $this->_is_pipe()) {
-			return false;
-		}
+        if (Arr::get($process_info, 'running')) {
+            $this->_call_trigger('running', $data);
+        } else {
+            $this->_exitcode = Arr::get($process_info, 'exitcode');
+            $this->_call_trigger('finished', $data);
+        }
+    }
 
-		$buffer = [];
-		$pipes = [Arr::get($this->_pipes, $pipe)];
+    /**
+     * Fill buffers
+     * @param int $pipe
+     * @return array|bool
+     */
+    private function _fill_buffer(int $pipe = Process::STDOUT): ?array
+    {
+        $buffer = [];
 
-		if (feof(Arr::get($pipes, 0))) {
-			return false;
-		}
+        if (!$this->_is_pipe($pipe)) {
+            return $buffer;
+        }
 
-		$ready = stream_select ($pipes, $write, $ex, 1, 0);
+        $pipes = [Arr::get($this->_pipes, $pipe)];
 
-		if ($ready === false) {
-			return false;
-		} elseif ($ready === 0 ) {
-			return $buffer;
-		}
+        if (feof(Arr::get($pipes, 0))) {
+            return $buffer;
+        }
 
-		$status = ['unread_bytes' => 1];
+        $ready = stream_select($pipes, $write, $ex, 1, 0);
 
-		while ($status['unread_bytes'] > 0) {
-			$read = fread(Arr::get($pipes, 0), Process::READ_LENGTH);
+        if ($ready === false) {
+            return null;
+        } elseif ($ready === 0) {
+            return $buffer;
+        }
 
-			if ($read !== false) {
-				$buffer[] = trim($read);
-			}
+        $status = ['unread_bytes' => 1];
 
-			$status = stream_get_meta_data(Arr::get($pipes, 0));
-		}
+        while ($status['unread_bytes'] > 0) {
+            $read = fread(Arr::get($pipes, 0), Process::READ_LENGTH);
 
-		if ( ! empty ($buffer)) {
-			$buffer_vals = trim (implode ('', $buffer));
-			//ignore dummy output
-			if ( ! empty ($buffer_vals)) {
-				$ret = [];
-				$this->_log[$pipe][] = $ret['buffer'] = $buffer;
-				$ret['message'] = array_pop ($buffer);
-				return $ret;
-			}
-		}
+            if ($read !== false) {
+                $buffer[] = trim($read);
+            }
 
-		return false;
-	}
+            $status = stream_get_meta_data(Arr::get($pipes, 0));
+        }
 
-	/**
-	 * Detect pipe-type file or pipe
-	 * @param  int $pipe
-	 * @return bool
-	 */
-	private function _is_pipe (int $pipe = Process::STDOUT)
-	{
-		return (Arr::path ($this->_descriptor, $pipe.'.0') == 'pipe');
-	}
+        if (!empty ($buffer)) {
+            $buffer_vals = trim(implode('', $buffer));
+            //ignore dummy output
+            if (!empty ($buffer_vals)) {
+                $ret = [];
+                $this->_log[$pipe][] = $ret['buffer'] = $buffer;
+                $ret['message'] = array_pop($buffer);
+                return $ret;
+            }
+        }
 
-	/**
-	 * Try to call closure if present
-	 * @param  string $action
-	 * @param  array  $data
-	 * @return $this
-	 */
-	private function _call_trigger ($action, $data = [])
-	{
-		if (empty ($data)) {
-			$data = null;
-		}
+        return null;
+    }
 
-		$f = Arr::get($this->_triggers, $action);
+    /**
+     * Detect pipe-type file or pipe
+     * @param int $pipe
+     * @return bool
+     */
+    private function _is_pipe(int $pipe = Process::STDOUT): bool
+    {
+        return (Arr::path($this->_descriptor, $pipe . '.0') == 'pipe');
+    }
 
-		if ( ! $f) {
-			$f = Arr::get($this->_triggers, 'all');
-		}
+    /**
+     * Try to call closure if present
+     * @param string $action
+     * @param array $data
+     * @return void
+     */
+    private function _call_trigger(string $action, array $data = []): void
+    {
+        if (empty ($data)) {
+            $data = null;
+        }
 
-		if ($f) {
-			call_user_func ($f, $data);
-		}
+        $f = Arr::get($this->_triggers, $action);
 
-		return $this;
-	}
+        if (!$f) {
+            $f = Arr::get($this->_triggers, 'all');
+        }
 
-	/**
-	 * Detect OS type
-	 * @return string
-	 */
-    private function _detect_system ()
+        if ($f) {
+            call_user_func($f, $data);
+        }
+    }
+
+    /**
+     * Detect OS type
+     * @return string
+     */
+    private function _detect_system(): string
     {
         switch (true) :
             case stristr(PHP_OS, 'DAR'):
                 $os = 'macOS';
-            break;
+                break;
             case stristr(PHP_OS, 'LINUX'):
                 $os = 'Linux';
-            break;
+                break;
             default :
                 $os = 'Win';
-            break;
+                break;
         endswitch;
 
         return $os;
