@@ -7,7 +7,6 @@ namespace AppZz\CLI;
 
 use AppZz\Helpers\Arr;
 use Closure;
-use Throwable;
 
 /**
  * Class Process
@@ -132,16 +131,16 @@ class Process
         $this->_pipes = [];
         $os = $this->_detect_system();
 
-        try {
-            $this->_process = proc_open(
-                $this->_cmd,
-                $this->_descriptor,
-                $this->_pipes,
-                NULL,
-                NULL,
-                ['bypass_shell' => ($os == 'Win')]
-            );
-        } catch (Throwable $e) {
+        $this->_process = @proc_open(
+            $this->_cmd,
+            $this->_descriptor,
+            $this->_pipes,
+            NULL,
+            NULL,
+            ['bypass_shell' => ($os == 'Win')]
+        );
+
+        if (!is_resource($this->_process)) {
             return 1;
         }
 
